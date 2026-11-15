@@ -1,0 +1,123 @@
+# name: test/sql/attach.test
+# description: ATTACH a dlt source as a database: one table per resource, scans redirected to read_resource
+# group: [dlt]
+
+require vgi
+
+require-env DLT_WORKER
+
+require-env DLT_MOCK_API
+
+require-env DLT_FIXTURE_SOURCES
+
+statement ok
+ATTACH 'dlt' (TYPE vgi, LOCATION '{DLT_WORKER}');
+
+statement ok
+LOAD json;
+
+statement ok
+SET VARIABLE cfg = replace('{"client": {"base_url": "BASE/", "paginator": {"type": "page_number", "page_param": "page", "base_page": 1, "total_path": "total_pages"}}, "resource_defaults": {"endpoint": {"params": {"per_page": 10}}}, "resources": [{"name": "issues", "primary_key": "id", "endpoint": {"path": "issues", "data_selector": "data", "params": {"updated_since": {"type": "incremental", "cursor_path": "updated_at", "initial_value": "2026-01-01T00:00:00Z"}}}}, {"name": "users", "endpoint": {"path": "users", "paginator": "header_link"}}, {"name": "projects", "endpoint": {"path": "secure/projects", "data_selector": "projects", "paginator": "single_page"}, "columns": {"key": {"data_type": "text", "nullable": false}, "name": {"data_type": "text"}, "budget": {"data_type": "double"}}}]}', 'BASE', '{DLT_MOCK_API}');
+
+# Without column types for every resource, ATTACH says what to do.
+statement error
+ATTACH 'dlt' AS api (TYPE vgi, LOCATION '{DLT_WORKER}', source 'rest_api', config getvariable('cfg'));
+----
+<REGEX>:.*no column types for resource.*columns_json.*
+
+statement ok
+CREATE SECRET mock_api (TYPE dlt, CONFIG '{"client": {"auth": {"type": "bearer", "token": "test-token"}}}', SCOPE 'dlt://rest_api/127.0.0.1');
+
+# columns_json samples every selected resource (with the secret) ...
+statement ok
+SET VARIABLE cols = (SELECT columns::VARCHAR FROM dlt.main.columns_json('rest_api', config := getvariable('cfg')));
+
+query T
+SELECT getvariable('cols')::JSON->>'$.users.login';
+----
+VARCHAR
+
+# ... and ATTACH takes it: every resource becomes a table.
+statement ok
+ATTACH 'dlt' AS api (TYPE vgi, LOCATION '{DLT_WORKER}', source 'rest_api', config getvariable('cfg'), columns getvariable('cols'));
+
+query T
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'api' ORDER BY ALL;
+----
+issues
+projects
+users
+
+query TT
+SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = 'api' AND table_name = 'projects' ORDER BY column_index;
+----
+key	VARCHAR
+name	VARCHAR
+budget	DOUBLE
+
+query IIT
+SELECT count(*), sum(id), max(user.login) FROM api.issues;
+----
+45	1035	user3
+
+# Filters on the incremental cursor push down through the table too.
+query II
+SELECT count(*), min(id) FROM api.issues WHERE updated_at >= TIMESTAMPTZ '2026-02-14 00:00:00+00';
+----
+2	44
+
+# Scans resolve the scoped secret.
+query TR
+SELECT key, budget FROM api.projects ORDER BY key;
+----
+CORE	1200.5
+OPS	50.25
+WEB	300.0
+
+query II
+SELECT count(*), sum(id) FROM api.users;
+----
+12	78
+
+statement ok
+DETACH api;
+
+# A module source attached from a path, with its secret.
+statement ok
+CREATE SECRET shop (TYPE dlt, CONFIG '[sources.shop]
+api_key = "sk-test"', SCOPE 'dlt://vgi_dlt_fixture:shop');
+
+# ATTACH never sees secrets, so a source that needs one to be built is attached from columns alone.
+statement ok
+SET VARIABLE shop_cols = (SELECT columns::VARCHAR FROM dlt.main.columns_json('vgi_dlt_fixture:shop', path := '{DLT_FIXTURE_SOURCES}'));
+
+statement ok
+ATTACH 'dlt' AS shop (TYPE vgi, LOCATION '{DLT_WORKER}', source 'vgi_dlt_fixture:shop', source_path '{DLT_FIXTURE_SOURCES}', columns getvariable('shop_cols'));
+
+query T
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'shop' ORDER BY ALL;
+----
+daily_stats
+order_lines
+orders
+
+query IR
+SELECT count(*), sum(amount) FROM shop.orders;
+----
+30	1402.50
+
+query II
+SELECT count(*), sum(visits) FROM shop.daily_stats;
+----
+21	2163
+
+statement ok
+DETACH shop;
+
+statement error
+ATTACH 'dlt' AS nope (TYPE vgi, LOCATION '{DLT_WORKER}', source 'not a source');
+----
+<REGEX>:.*source must be.*
+
+statement ok
+DETACH dlt;

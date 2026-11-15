@@ -1,0 +1,154 @@
+# name: test/sql/module_source.test
+# description: a @dlt.source loaded by module path (test/dlt_sources/vgi_dlt_fixture), from path := and pip_url :=
+# group: [dlt]
+
+require vgi
+
+require-env DLT_WORKER
+
+require-env DLT_FIXTURE_SOURCES
+
+statement ok
+ATTACH 'dlt' (TYPE vgi, LOCATION '{DLT_WORKER}');
+
+statement ok
+LOAD json;
+
+statement ok
+SET VARIABLE src = '{DLT_FIXTURE_SOURCES}';
+
+# The source reads api_key from dlt's config: without a secret it cannot even be built.
+statement error
+SELECT * FROM dlt.main.resources('vgi_dlt_fixture:shop', path := getvariable('src'));
+----
+<REGEX>:.*api_key.*
+
+# The secret is TOML, exactly a secrets.toml section. Its scope is a prefix of
+# 'dlt://<module:function>', so 'dlt://vgi_dlt_fixture' covers every source in the module.
+statement ok
+CREATE SECRET shop (TYPE dlt, CONFIG '[sources.shop]
+api_key = "sk-test-123"', SCOPE 'dlt://vgi_dlt_fixture');
+
+query TTTTTTT
+SELECT name, is_transformer, parent, primary_key, write_disposition, incremental_cursor, incremental_initial_value
+FROM dlt.main.resources('vgi_dlt_fixture:shop', path := getvariable('src')) ORDER BY name;
+----
+daily_stats	false	NULL	[day]	append	NULL	NULL
+order_lines	true	orders	[order_id, line]	append	NULL	NULL
+orders	false	NULL	[order_id]	merge	placed_at	2026-03-01T00:00:00Z
+
+# The module name alone works when the module defines exactly one source.
+query I
+SELECT count(*) FROM dlt.main.resources('vgi_dlt_fixture', path := getvariable('src'));
+----
+3
+
+query TITTT
+SELECT resource, ordinal, column_name, data_type, origin
+FROM dlt.main.infer_columns('vgi_dlt_fixture:shop', path := getvariable('src')) ORDER BY resource, ordinal;
+----
+daily_stats	1	day	DATE	sample
+daily_stats	2	visits	INTEGER	sample
+daily_stats	3	conversion	DOUBLE	sample
+order_lines	1	order_id	BIGINT	sample
+order_lines	2	line	BIGINT	sample
+order_lines	3	sku	VARCHAR	sample
+orders	1	order_id	BIGINT	hint
+orders	2	amount	DECIMAL(10,2)	hint
+orders	3	placed_at	TIMESTAMP WITH TIME ZONE	hint
+orders	4	customer	STRUCT(name VARCHAR, vip BOOLEAN)	sample
+orders	5	tags	VARCHAR[]	sample
+
+# Dict items typed by hints (DECIMAL, TIMESTAMPTZ) and inference (STRUCT, LIST).
+query ITTTI
+SELECT count(*), sum(amount), max(placed_at), typeof(any_value(customer)), count(*) FILTER (WHERE customer.vip)
+FROM dlt.main.read_resource('vgi_dlt_fixture:shop', 'orders', path := getvariable('src'));
+----
+30	1402.50	2026-03-08 12:00:00+00	STRUCT("name" VARCHAR, vip BOOLEAN)	6
+
+# config := passes keyword arguments to the source function; 2,500 items span several batches.
+query III
+SELECT count(*), count(DISTINCT order_id), sum(order_id)
+FROM dlt.main.read_resource('vgi_dlt_fixture:shop', 'orders', path := getvariable('src'), config := '{"count": 2500}');
+----
+2500	2500	3126250
+
+# A transformer resource: its parent runs underneath.
+query II
+SELECT count(*), count(DISTINCT order_id) FROM dlt.main.read_resource('vgi_dlt_fixture:shop', 'order_lines', path := getvariable('src'));
+----
+60	30
+
+# Arrow tables a resource yields keep their Arrow types.
+query TTIII
+SELECT typeof(day), typeof(visits), count(*), sum(visits), count(DISTINCT day)
+FROM dlt.main.read_resource('vgi_dlt_fixture:shop', 'daily_stats', path := getvariable('src')) GROUP BY ALL;
+----
+DATE	INTEGER	21	2163	21
+
+# Incremental: initial_value overrides, a filter on the cursor pushes down, state resumes.
+query I
+SELECT count(*) FROM dlt.main.read_resource('vgi_dlt_fixture:shop', 'orders', path := getvariable('src'), initial_value := '2026-03-05T00:00:00Z');
+----
+15
+
+query I
+SELECT count(*) FROM dlt.main.read_resource('vgi_dlt_fixture:shop', 'orders', path := getvariable('src'))
+WHERE placed_at >= TIMESTAMPTZ '2026-03-07 00:00:00+00';
+----
+7
+
+query ITT
+SELECT items, last_value, state->>'$.incremental.placed_at.start_value'
+FROM dlt.main.final_state('vgi_dlt_fixture:shop', 'orders', path := getvariable('src'), initial_value := '2026-03-08T00:00:00Z');
+----
+3	2026-03-08T12:00:00Z	2026-03-08T00:00:00Z
+
+statement ok
+SET VARIABLE st = (SELECT state::VARCHAR FROM dlt.main.final_state('vgi_dlt_fixture:shop', 'orders', path := getvariable('src'), config := '{"count": 30}'));
+
+# Resuming from the final state with more data available returns only the new items.
+query II
+SELECT count(*), min(order_id) FROM dlt.main.read_resource('vgi_dlt_fixture:shop', 'orders', path := getvariable('src'), config := '{"count": 34}', state := getvariable('st'))
+WHERE order_id > 30;
+----
+4	31
+
+# read_items: raw JSON (Arrow rows too).
+query II
+SELECT count(*), sum((item->>'$.order_id')::INT) FROM dlt.main.read_items('vgi_dlt_fixture:shop', 'orders', path := getvariable('src'));
+----
+30	465
+
+query I
+SELECT count(*) FROM dlt.main.read_items('vgi_dlt_fixture:shop', 'daily_stats', path := getvariable('src'));
+----
+21
+
+# A wrong key in a secret picked by name: the source's own error surfaces.
+statement ok
+CREATE SECRET shop_bad (TYPE dlt, CONFIG '{"sources": {"shop": {"api_key": "bad"}}}');
+
+statement error
+SELECT * FROM dlt.main.resources('vgi_dlt_fixture:shop', path := getvariable('src'), secret_name := 'shop_bad');
+----
+<REGEX>:.*must start with.*
+
+# pip_url := installs the package into an isolated, cached environment (never the worker's).
+query II
+SELECT count(*), sum(order_id) FROM dlt.main.read_resource('vgi_dlt_fixture:shop', 'orders', pip_url := getvariable('src'));
+----
+30	465
+
+statement error
+SELECT * FROM dlt.main.resources('vgi_dlt_fixture:shop', path := '/definitely/not/here');
+----
+<REGEX>:.*not a directory.*
+
+statement error
+SELECT * FROM dlt.main.resources('vgi_dlt_fixture:nope', path := getvariable('src'));
+----
+<REGEX>:.*nope.*
+
+statement ok
+DETACH dlt;

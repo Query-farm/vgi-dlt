@@ -1,0 +1,38 @@
+# Private graders for the public vgi.agent_test_tasks in the worker's catalog metadata.
+# `vgi-lint lint --ai` runs an agent on each prompt and grades it with check_sql.
+# See https://github.com/Query-farm/vgi-lint-check (VGI920).
+# Both tasks read the public, keyless PokeAPI (https://pokeapi.co) through dlt's rest_api source.
+tasks:
+  - name: pokeapi_berry_count
+    check_sql: >-
+      SELECT count(*) = 64 FROM dlt.main.read_resource('rest_api', 'berry',
+        config := '{"client": {"base_url": "https://pokeapi.co/api/v2/", "paginator": "json_link"}, "resource_defaults": {"endpoint": {"params": {"limit": 100}}}, "resources": ["pokemon", "berry"]}')
+  - name: pokeapi_resources
+    reference_sql: >-
+      SELECT name FROM dlt.main.resources('rest_api',
+        config := '{"client": {"base_url": "https://pokeapi.co/api/v2/", "paginator": "json_link"}, "resource_defaults": {"endpoint": {"params": {"limit": 100}}}, "resources": ["pokemon", "berry"]}')
+      ORDER BY name
+  - name: pokeapi_berry_columns
+    check_sql: >-
+      SELECT data_type = 'VARCHAR' FROM dlt.main.infer_columns('rest_api', resource := 'berry',
+        config := '{"client": {"base_url": "https://pokeapi.co/api/v2/", "paginator": "json_link"}, "resource_defaults": {"endpoint": {"params": {"limit": 100}}}, "resources": ["pokemon", "berry"]}')
+      WHERE column_name = 'url'
+  - name: pokeapi_columns_for_attach
+    check_sql: >-
+      SELECT list_sort(json_keys(columns)) = ['berry', 'pokemon'] FROM dlt.main.columns_json('rest_api',
+        config := '{"client": {"base_url": "https://pokeapi.co/api/v2/", "paginator": "json_link"}, "resource_defaults": {"endpoint": {"params": {"limit": 100}}}, "resources": ["pokemon", "berry"]}')
+  - name: pokeapi_first_berry_raw
+    check_sql: >-
+      SELECT bool_or(item->>'$.name' = 'cheri') FROM dlt.main.read_items('rest_api', 'berry',
+        config := '{"client": {"base_url": "https://pokeapi.co/api/v2/", "paginator": "json_link"}, "resource_defaults": {"endpoint": {"params": {"limit": 100}}}, "resources": ["pokemon", "berry"]}')
+      WHERE item->>'$.url' LIKE '%/berry/1/'
+  - name: pokeapi_item_count_state
+    check_sql: >-
+      SELECT items > 1000 FROM dlt.main.final_state('rest_api', 'pokemon',
+        config := '{"client": {"base_url": "https://pokeapi.co/api/v2/", "paginator": "json_link"}, "resource_defaults": {"endpoint": {"params": {"limit": 100}}}, "resources": ["pokemon", "berry"]}')
+  - name: dlt_type_of_timestamp
+    reference_sql: >-
+      SELECT dlt.main.column_type('timestamp') AS duckdb_type
+  - name: infer_nested_object
+    reference_sql: >-
+      SELECT dlt.main.infer_type('{"login": "ada", "id": 7}') AS duckdb_type

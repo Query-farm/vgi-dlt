@@ -1,0 +1,265 @@
+# name: test/sql/dlt.test
+# description: dlt's declarative rest_api source against the hermetic mock API (test/mock_api/server.py)
+# group: [dlt]
+
+require vgi
+
+require-env DLT_WORKER
+
+require-env DLT_MOCK_API
+
+statement ok
+ATTACH 'dlt' (TYPE vgi, LOCATION '{DLT_WORKER}');
+
+statement ok
+LOAD json;
+
+# A rest_api config: page-number pagination with a total, an incremental start
+# parameter, a child resource, a Link-header paginator, an auth-required
+# endpoint and a deselected resource. The base URL comes from the environment.
+statement ok
+SET VARIABLE cfg = replace('{"client": {"base_url": "BASE/", "paginator": {"type": "page_number", "page_param": "page", "base_page": 1, "total_path": "total_pages"}}, "resource_defaults": {"endpoint": {"params": {"per_page": 10}}}, "resources": [{"name": "issues", "primary_key": "id", "endpoint": {"path": "issues", "data_selector": "data", "params": {"updated_since": {"type": "incremental", "cursor_path": "updated_at", "initial_value": "2026-01-01T00:00:00Z"}}}}, {"name": "comments", "endpoint": {"path": "issues/{resources.issues.id}/comments", "paginator": "single_page"}}, {"name": "users", "endpoint": {"path": "users", "paginator": "header_link"}}, {"name": "projects", "endpoint": {"path": "secure/projects", "data_selector": "projects", "paginator": "single_page"}, "columns": {"budget": {"data_type": "double"}}}, {"name": "requests", "selected": false, "endpoint": {"path": "requests", "paginator": "single_page"}}]}', 'BASE', '{DLT_MOCK_API}');
+
+# ---------------------------------------------------------------- resources
+
+query TTTTTTT
+SELECT name, selected, is_transformer, parent, primary_key, incremental_cursor, incremental_initial_value
+FROM dlt.main.resources('rest_api', config := getvariable('cfg')) ORDER BY name;
+----
+comments	true	true	issues	[]	NULL	NULL
+issues	true	false	NULL	[id]	updated_at	2026-01-01T00:00:00Z
+projects	true	false	NULL	[]	NULL	NULL
+requests	false	false	NULL	[]	NULL	NULL
+users	true	false	NULL	[]	NULL	NULL
+
+# Column hints from the config.
+query TTT
+SELECT c.name, c.data_type, c.duckdb_type
+FROM (SELECT unnest(columns) AS c FROM dlt.main.resources('rest_api', config := getvariable('cfg')) WHERE name = 'projects');
+----
+budget	double	DOUBLE
+
+# ---------------------------------------------------------------- inference
+
+query ITTTT
+SELECT ordinal, column_name, data_type, nullable, origin
+FROM dlt.main.infer_columns('rest_api', resource := 'issues', config := getvariable('cfg')) ORDER BY ordinal;
+----
+1	id	BIGINT	false	sample
+2	number	BIGINT	true	sample
+3	title	VARCHAR	true	sample
+4	state	VARCHAR	true	sample
+5	score	DOUBLE	true	sample
+6	is_pull_request	BOOLEAN	true	sample
+7	labels	VARCHAR[]	true	sample
+8	user	STRUCT(login VARCHAR, id BIGINT)	true	sample
+9	created_at	TIMESTAMP WITH TIME ZONE	true	sample
+10	updated_at	TIMESTAMP WITH TIME ZONE	true	sample
+11	due_on	DATE	true	sample
+12	closed_at	TIMESTAMP WITH TIME ZONE	true	sample
+
+# ---------------------------------------------------------------- read_resource
+
+# All five pages (each answered 429 once first: dlt retries it).
+query IIIT
+SELECT count(*), sum(id), count(DISTINCT id), max(updated_at)
+FROM dlt.main.read_resource('rest_api', 'issues', config := getvariable('cfg'));
+----
+45	1035	45	2026-02-15 00:00:00+00
+
+# Real nested types: STRUCT field access and LIST functions.
+query TIT
+SELECT user.login, count(*), sum(len(labels)) FROM dlt.main.read_resource('rest_api', 'issues', config := getvariable('cfg'))
+GROUP BY ALL ORDER BY 1;
+----
+user0	11	11
+user1	12	12
+user2	11	10
+user3	11	12
+
+query ITTTTT
+SELECT id, title, typeof(created_at), typeof(due_on), due_on, closed_at
+FROM dlt.main.read_resource('rest_api', 'issues', config := getvariable('cfg')) WHERE id IN (1, 2) ORDER BY id;
+----
+1	Issue 1	TIMESTAMP WITH TIME ZONE	DATE	2026-02-01	2026-01-02 05:00:00+00
+2	Issue 2	TIMESTAMP WITH TIME ZONE	DATE	2026-02-02	NULL
+
+# Link-header pagination.
+query III
+SELECT count(*), sum(id), count(*) FILTER (WHERE admin) FROM dlt.main.read_resource('rest_api', 'users', config := getvariable('cfg'));
+----
+12	78	1
+
+# A child resource: one request per parent item.
+query II
+SELECT count(*), count(DISTINCT issue_id) FROM dlt.main.read_resource('rest_api', 'comments', config := getvariable('cfg'));
+----
+90	45
+
+# columns := overrides inference.
+query TT
+SELECT typeof(score), typeof(number)
+FROM dlt.main.read_resource('rest_api', 'issues', config := getvariable('cfg'), columns := '{"score": "VARCHAR", "number": "integer"}') LIMIT 1;
+----
+VARCHAR	INTEGER
+
+# sample_rows := 0 with no hints for most columns: only the hinted key column.
+query I
+SELECT count(*) FROM dlt.main.read_resource('rest_api', 'issues', config := getvariable('cfg'), sample_rows := 0);
+----
+45
+
+# ---------------------------------------------------------------- incremental
+
+# initial_value overrides the configured start; the API only sees the new one.
+query IT
+SELECT count(*), min(updated_at) FROM dlt.main.read_resource('rest_api', 'issues', config := getvariable('cfg'), initial_value := '2026-02-10T00:00:00Z');
+----
+6	2026-02-10 00:00:00+00
+
+query IT
+SELECT count(*), max(updated_at) FROM dlt.main.read_resource('rest_api', 'issues', config := getvariable('cfg'), initial_value := '2026-02-01T00:00:00Z', end_value := '2026-02-05T00:00:00Z');
+----
+4	2026-02-04 00:00:00+00
+
+# Filter pushdown: a lower bound on the cursor becomes the updated_since parameter.
+query IT
+SELECT count(*), min(id) FROM dlt.main.read_resource('rest_api', 'issues', config := getvariable('cfg')) WHERE updated_at >= TIMESTAMPTZ '2026-02-12 00:00:00+00';
+----
+4	42
+
+query I
+SELECT count(*) > 0 FROM dlt.main.read_items('rest_api', 'requests', config := getvariable('cfg'))
+WHERE item->>'$.query' LIKE '%updated_since=2026-02-12T00%3A00%3A00Z%';
+----
+true
+
+# A strict bound pushes down as >= and DuckDB re-applies the exact predicate.
+query I
+SELECT count(*) FROM dlt.main.read_resource('rest_api', 'issues', config := getvariable('cfg')) WHERE updated_at > TIMESTAMPTZ '2026-02-12 00:00:00+00';
+----
+3
+
+# final_state returns the cursor to resume from ...
+query ITTT
+SELECT items, incremental_cursor, last_value, state->>'$.incremental.updated_at.last_value'
+FROM dlt.main.final_state('rest_api', 'issues', config := getvariable('cfg'), initial_value := '2026-02-01T00:00:00Z');
+----
+15	updated_at	2026-02-15T00:00:00Z	2026-02-15T00:00:00Z
+
+statement ok
+SET VARIABLE st = (SELECT state::VARCHAR FROM dlt.main.final_state('rest_api', 'issues', config := getvariable('cfg'), initial_value := '2026-02-13T00:00:00Z'));
+
+# ... and state := resumes from it (dlt dedups the boundary item by its hash).
+query I
+SELECT count(*) FROM dlt.main.read_resource('rest_api', 'issues', config := getvariable('cfg'), state := getvariable('st'));
+----
+0
+
+# ---------------------------------------------------------------- read_items
+
+query IT
+SELECT count(*), max(item->>'$.title') FROM dlt.main.read_items('rest_api', 'users', config := getvariable('cfg'));
+----
+12	NULL
+
+query T
+SELECT item->>'$.login' FROM dlt.main.read_items('rest_api', 'users', config := getvariable('cfg')) ORDER BY (item->>'$.id')::INT LIMIT 2;
+----
+user1
+user2
+
+# ---------------------------------------------------------------- secrets
+
+# The auth-required endpoint fails without a secret (dlt's HTTP error surfaces).
+statement error
+SELECT * FROM dlt.main.read_resource('rest_api', 'projects', config := getvariable('cfg'), sample_rows := 0);
+----
+<REGEX>:.*401.*
+
+statement ok
+CREATE SECRET mock_api (TYPE dlt, CONFIG '{"client": {"auth": {"type": "bearer", "token": "test-token"}}}', SCOPE 'dlt://rest_api/127.0.0.1');
+
+query TRT
+SELECT key, budget, name FROM dlt.main.read_resource('rest_api', 'projects', config := getvariable('cfg')) ORDER BY key;
+----
+CORE	1200.5	Core platform
+OPS	50.25	Operations
+WEB	300.0	Website
+
+# The secret value never shows.
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE name = 'mock_api' AND secret_string LIKE '%test-token%';
+----
+0
+
+# A wrong token, picked by name, is refused by the API.
+statement ok
+CREATE SECRET wrong_token (TYPE dlt, CONFIG '{"client": {"auth": {"type": "bearer", "token": "nope"}}}');
+
+statement error
+SELECT * FROM dlt.main.read_resource('rest_api', 'projects', config := getvariable('cfg'), secret_name := 'wrong_token', sample_rows := 0);
+----
+<REGEX>:.*401.*
+
+statement error
+SELECT * FROM dlt.main.read_resource('rest_api', 'projects', config := getvariable('cfg'), secret_name := 'missing_secret');
+----
+<REGEX>:.*no dlt secret named.*
+
+# ---------------------------------------------------------------- type scalars (the executable examples)
+
+query TT
+SELECT t, dlt.main.column_type(t) AS duckdb_type FROM (VALUES ('bigint'), ('text'), ('timestamp'), ('struct(login varchar)')) v(t) ORDER BY t;
+----
+bigint	BIGINT
+struct(login varchar)	STRUCT(login VARCHAR)
+text	VARCHAR
+timestamp	TIMESTAMP WITH TIME ZONE
+
+query T
+SELECT dlt.main.infer_type(v) AS duckdb_type FROM (VALUES ('{"login": "ada", "id": 1}'), ('"2026-01-01T00:00:00Z"'), ('["bug", "ui"]')) t(v) ORDER BY duckdb_type;
+----
+STRUCT(login VARCHAR, id BIGINT)
+TIMESTAMP WITH TIME ZONE
+VARCHAR[]
+
+query TTTT
+SELECT dlt.main.column_type('nope'), dlt.main.column_type(NULL), dlt.main.infer_type('not json'), dlt.main.infer_type('null');
+----
+NULL	NULL	NULL	NULL
+
+query T
+SELECT dlt.main.column_type('decimal(18,2)');
+----
+DECIMAL(18,2)
+
+# ---------------------------------------------------------------- errors
+
+statement error
+SELECT * FROM dlt.main.read_resource('rest_api', 'nope', config := getvariable('cfg'));
+----
+<REGEX>:.*has no resource 'nope'.*
+
+statement error
+SELECT * FROM dlt.main.resources('rest_api');
+----
+<REGEX>:.*needs a config.*
+
+statement error
+SELECT * FROM dlt.main.resources('rest_api', config := '[1, 2]');
+----
+<REGEX>:.*must be a JSON object.*
+
+statement error
+SELECT * FROM dlt.main.read_resource('rest_api', 'issues', config := getvariable('cfg'), columns := '{"id": "NOT_A_TYPE"}');
+----
+<REGEX>:.*unknown column type.*
+
+statement error
+SELECT * FROM dlt.main.resources('not a module');
+----
+<REGEX>:.*
+
+statement ok
+DETACH dlt;

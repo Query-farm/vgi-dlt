@@ -27,6 +27,7 @@ def mock_api() -> Iterator[str]:
         [sys.executable, str(ROOT / "test" / "mock_api" / "server.py")],
         stdout=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
     )
     assert proc.stdout is not None
     line = proc.stdout.readline().strip()

@@ -177,7 +177,7 @@ def load_config(raw: str) -> dict[str, Any]:
         p = Path(text).expanduser()
         if not p.is_file():
             raise ValueError(f"config {raw[:80]!r} is neither a JSON object nor an existing file")
-        text = p.read_text()
+        text = p.read_text(encoding="utf-8")
     value = parse_json_arg(text, "config")
     if not isinstance(value, dict):
         raise ValueError("config must be a JSON object")

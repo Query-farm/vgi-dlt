@@ -179,7 +179,7 @@ def test_rest_api_secret_is_merged_into_the_request() -> None:
 
 def test_load_config(tmp_path: Path) -> None:
     f = tmp_path / "c.json"
-    f.write_text('{"count": 3}')
+    f.write_text('{"count": 3}', encoding="utf-8")
     assert common.load_config(str(f)) == {"count": 3}
     assert common.load_config("") == {}
     with pytest.raises(ValueError, match="JSON object"):

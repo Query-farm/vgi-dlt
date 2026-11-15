@@ -26,7 +26,6 @@ from __future__ import annotations
 import atexit
 import collections
 import contextlib
-import fcntl
 import hashlib
 import json
 import logging
@@ -38,6 +37,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from pathlib import Path
@@ -88,6 +88,42 @@ def _dlt_version() -> str:
     return version("dlt")
 
 
+@contextlib.contextmanager
+def _exclusive_lock(path: Path) -> Iterator[None]:
+    """Hold an exclusive cross-process lock on ``path`` (fcntl on POSIX, msvcrt on Windows)."""
+    with open(path, "a+", encoding="utf-8") as fh:
+        if sys.platform == "win32":
+            import msvcrt
+
+            fh.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:  # LK_LOCK gives up after ~10 s; keep waiting
+                    continue
+            try:
+                yield
+            finally:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _venv_bin(venv: Path, name: str) -> Path:
+    """Path of a console script or interpreter inside a virtual environment, per platform."""
+    if sys.platform == "win32":
+        return venv / "Scripts" / f"{name}.exe"
+    return venv / "bin" / name
+
+
 def cache_dir() -> Path:
     """Where source environments live: ``$VGI_DLT_CACHE_DIR`` or the user cache directory."""
     explicit = os.environ.get(CACHE_ENV_VAR)
@@ -101,7 +137,9 @@ def cache_dir() -> Path:
 
 def _run_install(cmd: list[str], what: str) -> None:
     log.info("dlt: %s", " ".join(cmd))
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900, check=False)
+    proc = subprocess.run(
+        cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900, check=False
+    )
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-15:]
         raise SourceError(f"could not {what} (exit {proc.returncode}):\n" + "\n".join(tail))
@@ -112,13 +150,12 @@ def interpreter(spec: EnvSpec) -> str:
     if not spec.pip_url:
         return sys.executable
     env_dir = cache_dir() / "envs" / spec.key
-    py = env_dir / "venv" / "bin" / "python"
+    py = _venv_bin(env_dir / "venv", "python")
     ready = env_dir / ".ready"
     if ready.is_file() and py.is_file():
         return str(py)
     env_dir.mkdir(parents=True, exist_ok=True)
-    with open(env_dir / ".lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with _exclusive_lock(env_dir / ".lock"):
         if ready.is_file() and py.is_file():
             return str(py)
         venv = env_dir / "venv"
@@ -137,7 +174,7 @@ def interpreter(spec: EnvSpec) -> str:
                 raise SourceError(f"python {spec.python} is not installed")
             _run_install([base, "-m", "venv", str(venv)], "create the source environment")
             _run_install([str(py), "-m", "pip", "install", "--quiet", *reqs], f"install {spec.pip_url}")
-        ready.write_text(spec.pip_url)
+        ready.write_text(spec.pip_url, encoding="utf-8")
     return str(py)
 
 

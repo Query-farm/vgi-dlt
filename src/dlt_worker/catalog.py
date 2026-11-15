@@ -81,7 +81,7 @@ def _json_option(raw: str, what: str) -> dict[str, Any]:
         p = Path(text).expanduser()
         if not p.is_file():
             raise ValueError(f"{what} {raw[:80]!r} is neither a JSON object nor an existing file")
-        text = p.read_text()
+        text = p.read_text(encoding="utf-8")
     value = common.parse_json_arg(text, what)
     if not isinstance(value, dict):
         raise ValueError(f"{what} must be a JSON object")

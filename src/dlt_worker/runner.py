@@ -194,7 +194,7 @@ def _signature_incremental(resource: Any) -> Any:
             continue
         try:
             sig = inspect.signature(fn)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
         for param in sig.parameters.values():
             if isinstance(param.default, Incremental):

@@ -370,7 +370,7 @@ class Coercer:
                 return None
             try:
                 return fn(v)
-            except (TypeError, ValueError, ArithmeticError, OverflowError, json.JSONDecodeError):
+            except TypeError, ValueError, ArithmeticError, OverflowError, json.JSONDecodeError:
                 self.rejected += 1
                 return None
 
@@ -514,7 +514,7 @@ def table_to_batch(table: pa.Table, schema: pa.Schema, coercer: Coercer) -> pa.R
             if isinstance(f.type, pa.ExtensionType):
                 raise pa.ArrowInvalid("extension")
             arr = col.cast(f.type)
-        except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pa.ArrowTypeError):
+        except pa.ArrowInvalid, pa.ArrowNotImplementedError, pa.ArrowTypeError:
             conv = coercer.converter(f.type)
             values = [conv(v) for v in col.to_pylist()]
             storage = f.type.storage_type if isinstance(f.type, pa.ExtensionType) else f.type

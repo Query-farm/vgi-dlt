@@ -1,6 +1,6 @@
 [project]
 name = "vgi-dlt-worker"
-version = "0.1.1"
+version = "0.1.2"
 description = "Run dlt (dlthub) sources - the declarative rest_api source or any @dlt.source - and query their resources as DuckDB tables."
 readme = "README.md"
 license = "0BSD"

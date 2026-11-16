@@ -36,7 +36,7 @@ iterated directly and their items stream back as Arrow batches.
 ```sql
 INSTALL vgi FROM community;   -- Haybarn 2.0; on DuckDB 2.0 use the query_farm repository (below)
 LOAD vgi;
-ATTACH 'dlt' (TYPE vgi, LOCATION 'uvx --from git+https://github.com/Query-farm/vgi-dlt@v0.1.1 vgi-dlt-worker');
+ATTACH 'dlt' (TYPE vgi, LOCATION 'uvx --from git+https://github.com/Query-farm/vgi-dlt@v0.1.2 vgi-dlt-worker');
 
 -- A REST API described with dlt's rest_api config.
 SET VARIABLE gh = '{

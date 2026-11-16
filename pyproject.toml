@@ -1,6 +1,6 @@
 [project]
 name = "vgi-dlt-worker"
-version = "0.1.0"
+version = "0.1.1"
 description = "Run dlt (dlthub) sources - the declarative rest_api source or any @dlt.source - and query their resources as DuckDB tables."
 readme = "README.md"
 license = "0BSD"
@@ -10,7 +10,7 @@ dependencies = [
     "dlt>=1.32,<2",
     # [http] adds the HTTP transport (`--http`) used by Docker deploys.
     # SDK bumps go through the template (minor bumps can raise the protocol).
-    "vgi-python[http,haybarn]>=0.52.0,<0.53",
+    "vgi-python[http,haybarn]>=0.52.2,<0.53",
 ]
 
 [project.scripts]
@@ -20,7 +20,7 @@ vgi-dlt-worker = "dlt_worker.worker:main"
 dev = [
     # The pushdown recipe evaluates predicates locally; a worker that uses filter
     # pushdown must add the `haybarn` extra to its own dependencies.
-    "vgi-python[haybarn]>=0.52.0,<0.53",
+    "vgi-python[haybarn]>=0.52.2,<0.53",
     "pytest>=8.4",
     "mypy>=1.18",
     "ruff>=0.14",

@@ -33,10 +33,12 @@ iterated directly and their items stream back as Arrow batches.
 
 ## Quick start
 
+vgi-dlt 0.2.0 speaks VGI protocol 3.4, so it needs Haybarn 2.0.1 or newer (Haybarn 2.0.0 loads a 3.3 `vgi` extension that cannot attach it).
+
 ```sql
 INSTALL vgi FROM community;   -- Haybarn 2.0; on DuckDB 2.0 use the query_farm repository (below)
 LOAD vgi;
-ATTACH 'dlt' (TYPE vgi, LOCATION 'uvx --from git+https://github.com/Query-farm/vgi-dlt@v0.1.2 vgi-dlt-worker');
+ATTACH 'dlt' (TYPE vgi, LOCATION 'uvx --from git+https://github.com/Query-farm/vgi-dlt@v0.2.0 vgi-dlt-worker');
 
 -- A REST API described with dlt's rest_api config.
 SET VARIABLE gh = '{
@@ -135,8 +137,9 @@ CREATE SECRET name (TYPE dlt, CONFIG '<JSON object or TOML>', SCOPE 'dlt://...')
   scope path is `dlt://rest_api/<base_url without scheme>`.
 - Module sources: `CONFIG` is read like dlt's `secrets.toml`
   (`[sources.<name>] access_token = "…"`), through an in-memory provider placed first in
-  dlt's provider chain. The scope path is `dlt://<package.module:function>`, so
-  `SCOPE 'dlt://github'` covers every source in the `github` package.
+  dlt's provider chain. The scope path is `dlt://<package>/<module>/<function>` (dots
+  and the colon become `/`), so `SCOPE 'dlt://github'` covers every source in the `github`
+  package and `SCOPE 'dlt://github/github_reactions'` one source.
 - A secret without a scope applies to every source; `secret_name :=` picks one by name.
 - The value is redacted in `duckdb_secrets()` and never written to a file, an environment
   variable, the scan cursor or an error message. dlt's own config lookup (environment

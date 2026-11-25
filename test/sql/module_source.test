@@ -23,8 +23,9 @@ SELECT * FROM dlt.main.resources('vgi_dlt_fixture:shop', path := getvariable('sr
 ----
 <REGEX>:.*api_key.*
 
-# The secret is TOML, exactly a secrets.toml section. Its scope is a prefix of
-# 'dlt://<module:function>', so 'dlt://vgi_dlt_fixture' covers every source in the module.
+# The secret is TOML, exactly a secrets.toml section. The scope path is
+# 'dlt://<module>/<function>', so 'dlt://vgi_dlt_fixture' covers every source in the module
+# (DuckDB 2.0.1 matches an authority-only scope only up to a '/').
 statement ok
 CREATE SECRET shop (TYPE dlt, CONFIG '[sources.shop]
 api_key = "sk-test-123"', SCOPE 'dlt://vgi_dlt_fixture');

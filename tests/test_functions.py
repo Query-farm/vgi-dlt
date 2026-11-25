@@ -164,7 +164,8 @@ def test_deep_merge_and_scope() -> None:
     }
     assert "auth" not in config["client"]
     assert common.scope_for("rest_api", config) == "dlt://rest_api/api.example.com/v1"
-    assert common.scope_for("pkg.mod:src", {}) == "dlt://pkg.mod:src"
+    assert common.scope_for("pkg.mod:src", {}) == "dlt://pkg/mod/src"
+    assert common.scope_for("vgi_dlt_fixture:shop", {}) == "dlt://vgi_dlt_fixture/shop"
 
 
 def test_rest_api_secret_is_merged_into_the_request() -> None:

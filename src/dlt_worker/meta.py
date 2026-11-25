@@ -82,7 +82,7 @@ CATALOG_DOC_LLM = (
     "packages) imported from `path` or installed from `pip_url` into an isolated cached environment, never into "
     "the worker. Credentials come only from a DuckDB secret of type `dlt` (CONFIG = JSON or TOML; deep-merged "
     "into a rest_api config, and served to dlt's config resolution like secrets.toml), scoped to "
-    "'dlt://rest_api/<host>' or 'dlt://<package.module:function>'. Columns come from dlt column hints plus "
+    "'dlt://rest_api/<host>' or 'dlt://<package>/<module>/<function>'. Columns come from dlt column hints plus "
     "inference from sampled items (`BIGINT`, `DOUBLE`, `BOOLEAN`, `VARCHAR`, `TIMESTAMPTZ`, `DATE`, `STRUCT`, `LIST`, "
     "`JSON`); "
     "Arrow data a resource yields keeps its types. dlt incremental cursors map to `initial_value`, `end_value`, "

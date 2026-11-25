@@ -18,7 +18,7 @@ into the source config (so the token stays out of the query text); for every
 source it is also handed to dlt as an in-memory config provider, exactly like a
 ``secrets.toml`` (``[sources.github] access_token = "..."``). The worker asks
 for the ``dlt`` secret whose scope best matches ``dlt://rest_api/<base_url
-without scheme>`` or ``dlt://<package.module:function>``; a secret without a
+without scheme>`` or ``dlt://<package>/<module>/<function>``; a secret without a
 scope applies everywhere; ``secret_name`` picks one by name.
 
 **Resumable scans.** The scan cursor (``ScanCursor``) holds a random token and
@@ -86,7 +86,8 @@ DLT_SECRET_TYPE = SecretTypeSpec(
                         "A JSON object or TOML text. For the rest_api source it is deep-merged into the REST "
                         'config (e.g. {"client": {"auth": {"type": "bearer", "token": "..."}}}); for every '
                         "source it is also read like dlt's secrets.toml (e.g. [sources.github] access_token). "
-                        "Bind it with SCOPE 'dlt://rest_api/<host>' or 'dlt://<package.module:function>'."
+                        "Bind it with SCOPE 'dlt://rest_api/<host>' or 'dlt://<package>/<module>/<function>' "
+                        "(or a prefix of it that ends at a '/')."
                     ),
                 },
             )
@@ -191,7 +192,10 @@ def scope_for(source: str, config: Mapping[str, Any]) -> str:
         u = urlparse(base)
         where = (u.netloc + u.path).rstrip("/") if u.netloc else base
         return f"{SCOPE_PREFIX}rest_api/{where}"
-    return SCOPE_PREFIX + source
+    # 'package.module:function' -> 'dlt://package/module/function'. Since DuckDB
+    # 2.0.1 (duckdb#28684) an authority-only scope such as 'dlt://github' matches
+    # only up to a '/', so 'dlt://github.repos:src' would not be covered by it.
+    return SCOPE_PREFIX + source.replace(":", ".").replace(".", "/")
 
 
 def _secret_doc(secret: Mapping[str, Any] | None) -> dict[str, Any]:

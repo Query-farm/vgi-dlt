@@ -85,7 +85,7 @@ DETACH api;
 # A module source attached from a path, with its secret.
 statement ok
 CREATE SECRET shop (TYPE dlt, CONFIG '[sources.shop]
-api_key = "sk-test"', SCOPE 'dlt://vgi_dlt_fixture:shop');
+api_key = "sk-test"', SCOPE 'dlt://vgi_dlt_fixture/shop');
 
 # ATTACH never sees secrets, so a source that needs one to be built is attached from columns alone.
 statement ok

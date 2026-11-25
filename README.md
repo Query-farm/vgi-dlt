@@ -33,10 +33,12 @@ iterated directly and their items stream back as Arrow batches.
 
 ## Quick start
 
+vgi-dlt 0.2.0 speaks VGI protocol 3.4, so it needs Haybarn 2.0.1 or newer (Haybarn 2.0.0 loads a 3.3 `vgi` extension that cannot attach it).
+
 ```sql
 INSTALL vgi FROM community;   -- Haybarn 2.0; on DuckDB 2.0 use the query_farm repository (below)
 LOAD vgi;
-ATTACH 'dlt' (TYPE vgi, LOCATION 'uvx --from git+https://github.com/Query-farm/vgi-dlt@v0.1.2 vgi-dlt-worker');
+ATTACH 'dlt' (TYPE vgi, LOCATION 'uvx --from git+https://github.com/Query-farm/vgi-dlt@v0.2.0 vgi-dlt-worker');
 
 -- A REST API described with dlt's rest_api config.
 SET VARIABLE gh = '{
